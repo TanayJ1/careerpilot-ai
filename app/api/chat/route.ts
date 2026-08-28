@@ -1,76 +1,231 @@
-import { NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
+import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenAI } from "@google/genai";
 
-export const runtime = 'nodejs';
-export const maxDuration = 60;
+const apiKey = process.env.GEMINI_API_KEY;
 
-const jobTool = {
-  type: 'function' as const,
-  name: 'search_jobs',
-  description: 'Search live remote job listings. Use when the user asks to find or compare current jobs.',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: 'Job role, skills, or keywords.' }
-    },
-    required: ['query']
-  }
-};
-
-async function searchJobs(query: string) {
-  const url = `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=10`;
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Remotive returned ${res.status}`);
-  const data = await res.json();
-  return (data.jobs || []).slice(0, 10).map((job: any) => ({
-    id: job.id,
-    title: job.title,
-    company: job.company_name,
-    location: job.candidate_required_location,
-    url: job.url,
-    published: job.publication_date,
-    description: String(job.description || '').replace(/<[^>]*>/g, '').slice(0, 1400),
-    tags: job.tags || []
-  }));
+if (!apiKey) {
+  throw new Error("GEMINI_API_KEY is not configured.");
 }
 
-export async function POST(request: Request) {
+const ai = new GoogleGenAI({ apiKey });
+
+const tools = [
+  {
+    type: "function" as const,
+    name: "search_jobs",
+    description:
+      "Search for remote job opportunities based on a job role, skills, or keywords.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Job role, skills, or keywords to search for.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    type: "function" as const,
+    name: "search_resume",
+    description:
+      "Search the user's uploaded resume for skills, projects, education, and experience.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The information you want to find in the user's resume.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+];
+
+async function searchJobs(query: string) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY is not configured.' }, { status: 500 });
-    const body = await request.json();
-    const message = String(body.message || '').trim();
-    const storeName = body.storeName ? String(body.storeName) : '';
-    if (!message) return NextResponse.json({ error: 'Message is required.' }, { status: 400 });
+    const url =
+      `https://remotive.com/api/remote-jobs?search=` + encodeURIComponent(query);
 
-    const ai = new GoogleGenAI({ apiKey });
-    const tools: any[] = [jobTool];
-    if (storeName) tools.push({ type: 'file_search', file_search_store_names: [storeName] });
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
 
-    const system = `You are CareerPilot, an AI career research agent. You help users find and evaluate software and AI jobs using live remote job data and the user's uploaded resume. When a resume is available, use File Search to retrieve relevant evidence before making fit claims. Use search_jobs for current job listings. Never invent experience. Prefer concise, practical recommendations with a match rationale and skill gaps. Mention that live listings are sourced from Remotive when job results are used.`;
-
-    let interaction = await ai.interactions.create({ model: 'gemini-3.7-flash', input: message, system_instruction: system, tools });
-    const usedTools: string[] = [];
-
-    for (let round = 0; round < 5; round++) {
-      const calls = interaction.steps.filter((s: any) => s.type === 'function_call');
-      if (!calls.length) break;
-      const results = [];
-      for (const call of calls as any[]) {
-        if (call.name === 'search_jobs') {
-          usedTools.push('search_jobs');
-          const result = await searchJobs(String(call.arguments?.query || message));
-          results.push({ type: 'function_result', name: call.name, call_id: call.id, result: [{ type: 'text', text: JSON.stringify(result) }] });
-        }
-      }
-      if (!results.length) break;
-      interaction = await ai.interactions.create({ model: 'gemini-3.7-flash', previousInteractionId: interaction.id, input: results, tools });
+    if (!response.ok) {
+      return { error: "Job search service returned an error." };
     }
 
-    const output = interaction.output_text || 'I could not produce a result.';
-    return NextResponse.json({ answer: output, tools: [...new Set(usedTools)], source: 'Remotive' });
+    const data = await response.json();
+
+    const jobs = (data.jobs || []).slice(0, 8).map((job: any) => ({
+      title: job.title,
+      company: job.company_name,
+      location: job.candidate_required_location,
+      url: job.url,
+      description: job.description,
+    }));
+
+    return { query, jobs };
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Agent request failed.' }, { status: 500 });
+    console.error("Job search error:", error);
+    return { error: "Unable to search jobs right now." };
+  }
+}
+
+async function searchResume(query: string) {
+  const storeName = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
+
+  if (!storeName) {
+    return {
+      error: "Resume knowledge base is not configured. Please upload your resume first.",
+    };
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3.6-flash",
+      contents: query,
+      config: {
+        tools: [{ fileSearch: { fileSearchStoreNames: [storeName] } }],
+      },
+    });
+
+    return {
+      query,
+      answer: response.text || "No relevant information was found in the resume.",
+    };
+  } catch (error) {
+    console.error("Resume search error:", error);
+    return { error: "Unable to search the resume." };
+  }
+}
+
+async function executeTool(name: string, arguments_: Record<string, unknown>) {
+  if (name === "search_jobs") {
+    return await searchJobs(String(arguments_.query || ""));
+  }
+  if (name === "search_resume") {
+    return await searchResume(String(arguments_.query || ""));
+  }
+  return { error: `Unknown tool: ${name}` };
+}
+
+/* ============================================================
+   TOOL-CALL STEP SHAPE
+   ------------------------------------------------------------
+   The SDK's `Step` union doesn't expose a matching type predicate
+   for function-call steps, and the exact literal type name isn't
+   confirmed against your installed SDK version. Casting through
+   `any` here is a deliberate, scoped escape — not a guess dressed
+   up as a real type. Verify against node_modules and tighten this
+   later (see note at bottom of this file).
+   ============================================================ */
+
+function isFunctionCallStep(step: any): boolean {
+  return step && step.type === "function_call";
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const userMessage = body.message;
+
+    if (!userMessage || typeof userMessage !== "string") {
+      return NextResponse.json({ error: "Message is required." }, { status: 400 });
+    }
+
+    const systemInstruction = `
+You are CareerPilot AI, an intelligent AI career assistant.
+
+Your job is to help users understand their resume and find suitable
+software engineering and AI engineering opportunities.
+
+You have access to two tools.
+
+TOOL 1: search_jobs
+Use this when you need to find job opportunities.
+
+TOOL 2: search_resume
+Use this when you need information about the user's resume.
+
+When the user asks for job recommendations:
+
+1. Search for relevant jobs.
+2. Search the user's resume for relevant skills and experience.
+3. Compare the candidate's background with the job requirements.
+4. Recommend the strongest matches.
+5. Explain why each recommendation is suitable.
+6. Never invent experience, skills, education, or projects that are not present in the resume.
+
+You are an agent.
+
+Decide which tools are necessary to answer the user's request.
+Use tools when appropriate.
+After receiving tool results, reason over them and provide a useful final response.
+
+Keep your response concise but informative.
+`;
+
+    let interaction: any = await ai.interactions.create({
+      model: "gemini-3.6-flash",
+      input: userMessage,
+      system_instruction: systemInstruction,
+      tools,
+    });
+
+    while (true) {
+      const functionCalls: any[] = (interaction.steps as any[]).filter(isFunctionCallStep);
+
+      if (functionCalls.length === 0) {
+        break;
+      }
+
+      const results: any[] = [];
+
+      for (const call of functionCalls) {
+        const toolName = String(call.name);
+        const toolArguments =
+          typeof call.arguments === "string"
+            ? JSON.parse(call.arguments)
+            : call.arguments || {};
+
+        console.log(`[AGENT TOOL CALL] ${toolName}`);
+        console.log(`[ARGUMENTS]`, toolArguments);
+
+        const toolResult = await executeTool(toolName, toolArguments);
+
+        results.push({
+          type: "function_result" as const,
+          name: toolName,
+          call_id: call.id,
+          result: [{ type: "text" as const, text: JSON.stringify(toolResult) }],
+        });
+      }
+
+      interaction = await ai.interactions.create({
+        model: "gemini-3.6-flash",
+        previous_interaction_id: interaction.id,
+        input: results,
+        tools,
+      });
+    }
+
+    return NextResponse.json({
+      answer: interaction.output_text || "I was unable to generate a response.",
+    });
+  } catch (error) {
+    console.error("Chat API error:", error);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Something went wrong while processing your request.",
+      },
+      { status: 500 }
+    );
   }
 }

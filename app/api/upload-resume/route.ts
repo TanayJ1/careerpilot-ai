@@ -1,29 +1,97 @@
-import { NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
 
-export const runtime = 'nodejs';
-export const maxDuration = 60;
+import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenAI } from "@google/genai";
 
-export async function POST(request: Request) {
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+
+export async function POST(request: NextRequest) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY is not configured.' }, { status: 500 });
-    const form = await request.formData();
-    const file = form.get('file');
-    if (!(file instanceof File)) return NextResponse.json({ error: 'No PDF file received.' }, { status: 400 });
-    if (file.type !== 'application/pdf') return NextResponse.json({ error: 'Only PDF resumes are supported.' }, { status: 400 });
-    if (file.size > 10 * 1024 * 1024) return NextResponse.json({ error: 'Resume must be smaller than 10 MB.' }, { status: 400 });
+    const formData = await request.formData();
 
-    const ai = new GoogleGenAI({ apiKey });
-    const store = await ai.fileSearchStores.create({ config: { displayName: `resume-${Date.now()}`, embeddingModel: 'models/gemini-embedding-001' } });
-    let operation = await ai.fileSearchStores.uploadToFileSearchStore({ file, fileSearchStoreName: store.name, config: { displayName: file.name, chunkingConfig: { whiteSpaceConfig: { maxTokensPerChunk: 300, maxOverlapTokens: 40 } } } });
-    while (!operation.done) {
-      await new Promise(r => setTimeout(r, 1500));
-      operation = await ai.operations.get({ operation });
+    const file = formData.get("file") as File | null;
+
+    if (!file) {
+      return NextResponse.json(
+        {
+          error: "No resume file was provided.",
+        },
+        { status: 400 }
+      );
     }
-    return NextResponse.json({ storeName: store.name, fileName: file.name });
+
+    if (file.type !== "application/pdf") {
+      return NextResponse.json(
+        {
+          error: "Please upload a PDF resume.",
+        },
+        { status: 400 }
+      );
+    }
+
+    /*
+     * Create a Gemini File Search store.
+     */
+    const store = await ai.fileSearchStores.create({
+      config: {
+        displayName: "CareerPilot Resume Knowledge",
+      },
+    });
+
+    if (!store.name) {
+      throw new Error("Gemini did not return a File Search Store name.");
+    }
+
+    /*
+     * Upload the resume into the File Search Store.
+     */
+    let operation =
+      await ai.fileSearchStores.uploadToFileSearchStore({
+        file,
+        fileSearchStoreName: store.name,
+        config: {
+          displayName: file.name,
+          chunkingConfig: {
+            whiteSpaceConfig: {
+              maxTokensPerChunk: 300,
+              maxOverlapTokens: 40,
+            },
+          },
+        },
+      });
+
+    /*
+     * Wait for indexing to finish.
+     */
+    while (!operation.done) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 2000)
+      );
+
+      operation = await ai.operations.get({
+        operation: operation,
+      });
+    }
+
+    /*
+     * Store the File Search Store name so the chat API
+     * can search the uploaded resume later.
+     */
+    return NextResponse.json({
+      success: true,
+      message: "Resume uploaded and indexed successfully.",
+      storeName: store.name,
+    });
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Resume indexing failed.' }, { status: 500 });
+    console.error("Resume upload error:", error);
+
+    return NextResponse.json(
+      {
+        error: "Failed to upload and index the resume.",
+      },
+      { status: 500 }
+    );
   }
 }
+
