@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { kv } from "@vercel/kv";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -76,25 +75,14 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * Persist the File Search Store name to disk so the chat API
-     * can look it up on later requests. Env vars can't be mutated
-     * at runtime by a running process, so we use a small JSON
-     * file instead. Good enough for a single-user prototype; swap
-     * for a DB row keyed by user/session if this goes multi-user.
+     * Persist the File Search Store name in Redis (Vercel Marketplace KV)
+     * so the chat API can look it up from any serverless invocation.
+     * A local fs write won't work on Vercel — the filesystem there is
+     * read-only outside of /tmp, and /tmp isn't shared across invocations.
      */
-    const dataDir = path.join(process.cwd(), "data");
-    await mkdir(dataDir, { recursive: true });
-
-    const storeFilePath = path.join(dataDir, "resume-store.json");
-    await writeFile(
-      storeFilePath,
-      JSON.stringify({
-        storeName: store.name,
-        fileName: file.name,
-        uploadedAt: new Date().toISOString(),
-      }),
-      "utf-8"
-    );
+    await kv.set("resume:storeName", store.name);
+    await kv.set("resume:fileName", file.name);
+    await kv.set("resume:uploadedAt", new Date().toISOString());
 
     return NextResponse.json({
       success: true,

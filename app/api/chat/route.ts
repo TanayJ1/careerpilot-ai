@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
-import { readFile } from "fs/promises";
-import path from "path";
+import { kv } from "@vercel/kv";
 
 const apiKey = process.env.GEMINI_API_KEY;
 
@@ -79,18 +78,12 @@ async function searchJobs(query: string) {
 
 /*
  * Reads the most recently uploaded resume's File Search store name
- * from disk. Returns null if no resume has been uploaded yet (the
- * file won't exist), rather than throwing.
+ * from Redis (Vercel Marketplace KV). Returns null if no resume
+ * has been uploaded yet.
  */
 async function getStoredResumeStoreName(): Promise<string | null> {
-  try {
-    const storeFilePath = path.join(process.cwd(), "data", "resume-store.json");
-    const raw = await readFile(storeFilePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return parsed.storeName || null;
-  } catch {
-    return null;
-  }
+  const storeName = await kv.get<string>("resume:storeName");
+  return storeName || null;
 }
 
 async function searchResume(query: string) {
@@ -214,6 +207,8 @@ Keep your response concise but informative.
         console.log(`[ARGUMENTS]`, toolArguments);
 
         const toolResult = await executeTool(toolName, toolArguments);
+
+        console.log(`[TOOL RESULT] ${toolName}`, JSON.stringify(toolResult).slice(0, 500));
 
         results.push({
           type: "function_result" as const,
