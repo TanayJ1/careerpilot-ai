@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { readFile } from "fs/promises";
+import path from "path";
 
 const apiKey = process.env.GEMINI_API_KEY;
 
@@ -75,8 +77,24 @@ async function searchJobs(query: string) {
   }
 }
 
+/*
+ * Reads the most recently uploaded resume's File Search store name
+ * from disk. Returns null if no resume has been uploaded yet (the
+ * file won't exist), rather than throwing.
+ */
+async function getStoredResumeStoreName(): Promise<string | null> {
+  try {
+    const storeFilePath = path.join(process.cwd(), "data", "resume-store.json");
+    const raw = await readFile(storeFilePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return parsed.storeName || null;
+  } catch {
+    return null;
+  }
+}
+
 async function searchResume(query: string) {
-  const storeName = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
+  const storeName = await getStoredResumeStoreName();
 
   if (!storeName) {
     return {

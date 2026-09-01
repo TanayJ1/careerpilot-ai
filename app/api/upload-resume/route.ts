@@ -1,6 +1,7 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { writeFile, mkdir } from "fs/promises";
+import path from "path";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -75,9 +76,26 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * Store the File Search Store name so the chat API
-     * can search the uploaded resume later.
+     * Persist the File Search Store name to disk so the chat API
+     * can look it up on later requests. Env vars can't be mutated
+     * at runtime by a running process, so we use a small JSON
+     * file instead. Good enough for a single-user prototype; swap
+     * for a DB row keyed by user/session if this goes multi-user.
      */
+    const dataDir = path.join(process.cwd(), "data");
+    await mkdir(dataDir, { recursive: true });
+
+    const storeFilePath = path.join(dataDir, "resume-store.json");
+    await writeFile(
+      storeFilePath,
+      JSON.stringify({
+        storeName: store.name,
+        fileName: file.name,
+        uploadedAt: new Date().toISOString(),
+      }),
+      "utf-8"
+    );
+
     return NextResponse.json({
       success: true,
       message: "Resume uploaded and indexed successfully.",
@@ -94,4 +112,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
