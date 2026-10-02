@@ -97,7 +97,7 @@ async function searchResume(query: string) {
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.6-flash",
       contents: query,
       config: {
         tools: [{ fileSearch: { fileSearchStoreNames: [storeName] } }],
@@ -181,7 +181,7 @@ Keep your response concise but informative.
 `;
 
     let interaction: any = await ai.interactions.create({
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.6-flash",
       input: userMessage,
       system_instruction: systemInstruction,
       tools,
@@ -219,7 +219,7 @@ Keep your response concise but informative.
       }
 
       interaction = await ai.interactions.create({
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.6-flash",
         previous_interaction_id: interaction.id,
         input: results,
         tools,
