@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
+
+const redis = new Redis({
+  url: process.env.CAREERPILOT_KV_REST_API_URL!,
+  token: process.env.CAREERPILOT_KV_REST_API_TOKEN!,
+});
 
 const apiKey = process.env.GEMINI_API_KEY;
 
@@ -82,7 +87,7 @@ async function searchJobs(query: string) {
  * has been uploaded yet.
  */
 async function getStoredResumeStoreName(): Promise<string | null> {
-  const storeName = await kv.get<string>("resume:storeName");
+ const storeName = await redis.get<string>("resume:storeName");
   return storeName || null;
 }
 
