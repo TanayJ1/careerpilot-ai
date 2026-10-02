@@ -1,7 +1,15 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
+
+const redisUrl = process.env.CAREERPILOT_KV_REST_API_URL;
+const redisToken = process.env.CAREERPILOT_KV_REST_API_TOKEN;
+
+const redis =
+  redisUrl && redisToken
+    ? new Redis({ url: redisUrl, token: redisToken })
+    : null;
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -96,9 +104,13 @@ export async function POST(request: NextRequest) {
     }
 
     stage = "saving resume information to KV";
-    await kv.set("resume:storeName", store.name);
-    await kv.set("resume:fileName", file.name);
-    await kv.set("resume:uploadedAt", new Date().toISOString());
+ if (!redis) {
+  throw new Error("Upstash Redis environment variables are missing.");
+}
+
+await redis.set("resume:storeName", store.name);
+await redis.set("resume:fileName", file.name);
+await redis.set("resume:uploadedAt", new Date().toISOString());
 
     return NextResponse.json({
       success: true,
