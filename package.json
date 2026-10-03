@@ -9,11 +9,13 @@
   },
   "dependencies": {
     "@google/genai": "latest",
+    "@upstash/ratelimit": "^2.2.0",
     "@upstash/redis": "^1.39.0",
-    "@vercel/kv": "^3.0.0",
     "next": "latest",
+    "next-auth": "^5.0.0-beta.32",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@types/react": "19.2.18",
